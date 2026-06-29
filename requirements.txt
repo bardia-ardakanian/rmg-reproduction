@@ -1,0 +1,14 @@
+torch
+numpy
+scipy
+matplotlib
+imageio
+imageio-ffmpeg
+tqdm
+tensorboard
+transformers
+gdown
+# visualization (capsule/skeleton via render_body.py; SMPL-X human mesh via fit_render_mesh.py)
+pyrender
+trimesh
+smplx

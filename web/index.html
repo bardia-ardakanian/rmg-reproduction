@@ -129,7 +129,7 @@ key.shadow.camera.left = key.shadow.camera.bottom = -8; key.shadow.camera.right 
 key.shadow.bias = -0.0002; key.shadow.radius = 4; scene.add(key);
 const fill = new THREE.DirectionalLight(0xffffff, 0.6); fill.position.set(-3, 2, 1.5); scene.add(fill);
 // soft checkerboard floor (like the project page)
-const checker = canvasTex((x,n)=>{ const s=n/8; for(let i=0;i<8;i++)for(let j=0;j<8;j++){ x.fillStyle=((i+j)%2)?'#e4e7ec':'#eef1f5'; x.fillRect(i*s,j*s,s,s); } }, 28);
+const checker = canvasTex((x,n)=>{ const s=n/8; for(let i=0;i<8;i++)for(let j=0;j<8;j++){ x.fillStyle=((i+j)%2)?'#4c505a':'#565b65'; x.fillRect(i*s,j*s,s,s); } }, 28);
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshStandardMaterial({ map: checker, roughness: 0.95 }));
 ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
 
@@ -221,7 +221,7 @@ function frameCamera(){
   for(const Pf of joints) for(const p of Pf){ mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]);mnz=Math.min(mnz,p[2]);mxz=Math.max(mxz,p[2]); }
   const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2, H=mxy-mny, W=Math.max(mxx-mnx,mxz-mnz)+0.6, fov=camera.fov*Math.PI/180;
   const aspect=Math.max(0.4,(view.clientWidth/view.clientHeight)||1.6), th=Math.tan(fov/2);
-  const dist=Math.max(3.0,(H+0.5)/2/th, Math.min((W/2)/(th*aspect),4.6))*1.5;   // pulled back, like the page
+  const dist=Math.max(3.8,(H+0.5)/2/th, Math.min((W/2)/(th*aspect),5.2))*1.95;   // pulled further back
   const ty=mny+H*0.46+0.1, az=-32*Math.PI/180, el=16*Math.PI/180;
   controls.target.set(cx,ty,cz);
   camera.position.set(cx+dist*Math.cos(el)*Math.sin(az), ty+dist*Math.sin(el), cz+dist*Math.cos(el)*Math.cos(az));

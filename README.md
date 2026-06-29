@@ -123,6 +123,31 @@ ssh -L 8000:localhost:8000 <host>
 
 set `RMG_CKPT` if your checkpoint isnt at `runs/rmg_base/model.pth`.
 
+## motionmillion (scaling up)
+
+same model, same method, just trained on motionmillion instead of humanml3d to see if it holds up at
+scale. the released part of motionmillion is about 458k clips of motion (rpr272 format, 30fps) which is
+roughly 20x humanml3d. i didnt touch the model at all. all i wrote is an adapter that turns the 272-dim
+rpr272 vectors into the representation rmg already uses (root translation + 22 joint quaternions) and a
+lazy dataloader so the whole set doesnt have to sit in memory.
+
+the rpr272 rotations are actually nicer to work with than humanml3d's: they're proper local smpl-x style
+rotations, so no smpl-x refitting needed for the body mesh. the decode in `src/mm_data.py` is a faithful
+port of motionmillion's `recover_from_local_rotation`. captions are llm-written (about 20 per clip), they
+sit packed in `texts.tar.gz` so `mm_prep.py` streams the tar instead of unpacking 1.5M tiny files, and
+the qwen embeddings get precomputed once into a memmap.
+
+the dataset is gated, request access on huggingface (`VankouF/MotionMillion`). on our box its already at
+`$MM_ROOT`. trained on <gpu-host> (<gpu-host>, one rtx 5090 32gb).
+
+```bash
+export MM_ROOT=$MM_ROOT
+bash scripts/mm_setup.sh        # extract the split lists, sanity-check the dataset
+bash scripts/mm_prep.sh         # clip index + qwen caption embeddings -> cache/mm_train_*
+bash scripts/run_rmg_mm.sh      # train -> runs/rmg_mm   (STEPS / BATCH / ACCUM / WORKERS overridable)
+bash scripts/tb.sh              # tensorboard on 6006
+```
+
 ## stuff i ran into
 
 - qwen pooling. qwen3-embedding wants last-token pooling with left padding, then an l2 normalize (see

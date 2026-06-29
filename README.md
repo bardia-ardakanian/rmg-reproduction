@@ -94,7 +94,8 @@ jitter, pass `--smooth 0` to turn it off.
 
 ### samples
 
-these are straight out of the web demo's renderer (montage mode):
+rendered by render_mannequin.py (montage mode), the same mannequin + ghost look the web demo shows and
+what its "save png / save gif" exports:
 
 | | | |
 |---|---|---|

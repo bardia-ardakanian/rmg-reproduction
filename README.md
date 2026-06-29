@@ -100,6 +100,25 @@ Joints and skeleton, straight from the generated joints (no body model):
 |---|---|
 | ![walk skeleton](figures/walk_skeleton.gif) | ![sit skeleton](figures/sit_skeleton.gif) |
 
+## Web demo
+
+An interactive viewer. Type a prompt, the model generates on the machine running the server, and the
+browser shows the motion in 3D. You can orbit with the mouse, play or scrub, switch between the body and
+the skeleton, and export a PNG or a GIF.
+
+```bash
+python web/app.py        # serves on port 8000
+```
+
+If the server runs on a remote box, tunnel the port and open it locally:
+
+```bash
+ssh -L 8000:localhost:8000 <host>
+# then open http://localhost:8000
+```
+
+Set `RMG_CKPT` to point at a checkpoint if it is not at `runs/rmg_base/model.pth`.
+
 ## Notes and gotchas
 
 A few things that cost me time and might save you some.

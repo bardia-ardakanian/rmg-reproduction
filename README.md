@@ -97,25 +97,44 @@ body, or `--body capsule`). everything smooths the joints over time (`--smooth`,
 
 ### samples
 
-reproducing the paper's figure 1 prompts with the robot mannequin (montage mode, same look the web demo
-shows and what its "save png / save gif" export):
+six prompts generated in the web demo, each the robot mannequin doing the motion as a gif. just the motion,
+no ghost trail, a colour per motion and the prompt baked in:
 
 | | | |
 |---|---|---|
-| ![still then jump+spin](figures/robot_spin.png) | ![taichi](figures/robot_taichi.png) | ![run then jump](figures/robot_run.png) |
+| ![salsa](figures/robot_salsa.gif) | ![taichi](figures/robot_taichi.gif) | ![run then jump](figures/robot_runjump.gif) |
+| ![yoga](figures/robot_yoga.gif) | ![back kick](figures/robot_kick.gif) | ![moonwalk](figures/robot_moonwalk.gif) |
 
-and animated, where the ghost trail follows the motion:
+the same model output drives a bare skeleton instead if you flip the demo's "skeleton" toggle, here for three
+of them:
 
 | | | |
 |---|---|---|
-| ![spin](figures/robot_spin.gif) | ![taichi](figures/robot_taichi.gif) | ![run](figures/robot_run.gif) |
+| ![salsa skeleton](figures/skel_salsa.gif) | ![run then jump skeleton](figures/skel_runjump.gif) | ![back kick skeleton](figures/skel_kick.gif) |
 
 ## web demo
 
-theres an interactive viewer too. type a prompt, it generates on whatever machine runs the server, and the
-browser drives the same rigged robot mannequin in 3d with the fading ghost trail (or a skeleton if you flip
-the toggle). orbit with the mouse, play/scrub, pick a body colour, toggle the ground shadow. save png or
-gif both bake in the ghosts and the prompt caption, so what you export matches the readme samples above.
+![the web demo](figures/web_demo.png)
+
+theres an interactive viewer too. type a prompt (or hit one of the example chips), it generates on whatever
+machine runs the server, and the browser drives the rigged robot mannequin in 3d (or a bare skeleton if you
+flip the toggle). orbit with the mouse, play/scrub, pick a body colour per motion, toggle the ground shadow
+and the motion-ghost trail, and set how many keyframes the png export uses.
+
+two exports. "save gif" writes the animation (the samples above). "save png" instead snapshots the pose at
+evenly spaced keyframes and lays them out left to right, one picture per keyframe:
+
+![salsa](figures/robot_salsa.png)
+
+![taichi](figures/robot_taichi.png)
+
+![run then jump](figures/robot_runjump.png)
+
+![yoga](figures/robot_yoga.png)
+
+![back kick](figures/robot_kick.png)
+
+![moonwalk](figures/robot_moonwalk.png)
 
 ```bash
 python web/app.py        # port 8000

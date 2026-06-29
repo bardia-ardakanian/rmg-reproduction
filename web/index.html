@@ -122,7 +122,7 @@ view.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 function canvasTex(draw, rep) { const c=document.createElement('canvas'); c.width=c.height=512; draw(c.getContext('2d'),512); const t=new THREE.CanvasTexture(c); if(rep){ t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rep,rep); t.anisotropy=8; } return t; }
 scene.background = canvasTex((x,n)=>{ const g=x.createLinearGradient(0,0,0,n); g.addColorStop(0,'#aeb4c0'); g.addColorStop(0.55,'#c2c7d0'); g.addColorStop(1,'#c8ccd4'); x.fillStyle=g; x.fillRect(0,0,n,n); });
-scene.fog = new THREE.Fog(0xc6cad3, 22, 90);                      // fade the far floor into the bg -> no hard floor edge
+scene.fog = new THREE.Fog(0xc6cad3, 45, 160);                     // fade only the very far floor into the bg
 const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 200);
 camera.position.set(-2.8, 2.0, 3.6);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -294,23 +294,43 @@ function compose(){
 }
 function download(url,name){ const a=document.createElement('a'); a.href=url; a.download=name; a.click(); }
 function ensurePool(N){ while(kfRobots.length<N){ const r=makeRobot(robotProto,1,true); r.root.visible=false; kfRobots.push(r); } }
-// save png: a picture of the scene with N keyframes shown at their natural positions (spread for travelling
-// motions, layered for in-place ones), on the big extended floor. caption baked in.
+function placeAt(inst, P, X){                                     // pose at keyframe, pelvis at world x=X, feet on floor
+  retarget(inst.bones, P);
+  inst.root.position.set(X - hh.x, 0, -hh.z);
+  inst.root.updateMatrixWorld(true);
+  let rf = 1e9; for (const b of FOOTB) rf = Math.min(rf, inst.bones[b].getWorldPosition(_fv).y);
+  let sf = 1e9; for (const p of P) sf = Math.min(sf, p[1]);
+  inst.root.position.y = sf - rf + 0.02;
+}
+// save png: one snapshot per keyframe (the centred pose), pictures placed side by side
+function buildStrip(PW, PH) {
+  const N = Math.min(+$('kf').value, nframes);
+  let Hs = 0; for (const Pf of joints) { let mn=1e9,mx=-1e9; for (const p of Pf){mn=Math.min(mn,p[1]);mx=Math.max(mx,p[1]);} if(mx-mn>Hs)Hs=mx-mn; }
+  const BAR = Math.round(PH*0.12);
+  const strip = document.createElement('canvas'); strip.width = N*PW; strip.height = PH+BAR;
+  const x = strip.getContext('2d'); x.fillStyle='#c8ccd4'; x.fillRect(0,0,strip.width,strip.height);
+  const ss = renderer.getSize(new THREE.Vector2()), cp = camera.position.clone(), ct = controls.target.clone(), ca = camera.aspect;
+  ghosts.forEach(g=>g.root.visible=false); skel.g.visible=false; kfRobots.forEach(k=>k.root.visible=false); now.root.visible=true;
+  now.root.scale.setScalar(Hs/bindH);
+  for (const m of now.mats) { m.color.setHex(robotColor); m.transparent=false; m.opacity=1; m.depthWrite=true; m.needsUpdate=true; }
+  now.root.traverse(o=>{ if(o.isMesh) o.castShadow = $('showShadow').checked; });
+  renderer.setSize(PW, PH); camera.aspect = PW/PH;
+  const th = Math.tan(camera.fov*Math.PI/360), dist = (Hs+0.45)/2/th*1.18, ty = Hs*0.52, az = -26*Math.PI/180, el = 11*Math.PI/180;
+  camera.position.set(dist*Math.cos(el)*Math.sin(az), ty+dist*Math.sin(el), dist*Math.cos(el)*Math.cos(az));
+  controls.target.set(0,ty,0); camera.lookAt(0,ty,0); camera.updateProjectionMatrix();
+  for (let i=0;i<N;i++) { const f = (N===1)?frame:Math.round(i*(nframes-1)/(N-1));
+    placeAt(now, joints[f], 0); renderer.render(scene,camera); x.drawImage(renderer.domElement, i*PW, 0, PW, PH); }
+  x.fillStyle='#1e2025'; x.textAlign='center'; x.textBaseline='middle';
+  let fs = Math.round(BAR*0.5); x.font='700 '+fs+'px system-ui, sans-serif'; const t='"'+prompt+'"';
+  while (x.measureText(t).width > strip.width*0.96 && fs > 9) { fs--; x.font='700 '+fs+'px system-ui, sans-serif'; }
+  x.fillText(t, strip.width/2, PH+BAR/2);
+  renderer.setSize(ss.x, ss.y); camera.aspect=ca; camera.position.copy(cp); controls.target.copy(ct); camera.updateProjectionMatrix();
+  setFrame(frame);
+  return strip;
+}
 $('savePng').onclick = () => {
   if (!joints) { renderer.render(scene,camera); return download(compose().toDataURL('image/png'),'motion.png'); }
-  const N = Math.min(+$('kf').value, nframes); ensurePool(N);
-  const sc = now.root.scale.x;
-  now.root.visible=false; ghosts.forEach(g=>g.root.visible=false); skel.g.visible=false; kfRobots.forEach(k=>k.root.visible=false);
-  for (let i=0;i<N;i++) {
-    const f = (N===1)?frame:Math.round(i*(nframes-1)/(N-1)), inst = kfRobots[i], last = (i===N-1), a = 0.34 + 0.66*(i/(N-1));
-    inst.root.scale.setScalar(sc); inst.root.visible=true;
-    for (const m of inst.mats) { m.color.setHex(robotColor); m.transparent=!last; m.opacity=last?1:a; m.depthWrite=last; m.needsUpdate=true; }
-    inst.root.traverse(o=>{ if(o.isMesh) o.castShadow = $('showShadow').checked; });
-    placeRobot(inst, joints[f]);                            // natural (trajectory) position
-  }
-  renderer.render(scene,camera);
-  download(compose().toDataURL('image/png'), 'motion.png');
-  kfRobots.forEach(k=>k.root.visible=false); now.root.visible=true; setFrame(frame);
+  download(buildStrip(300, 460).toDataURL('image/png'), 'motion.png');
 };
 $('saveGif').onclick = async () => {
   if (!joints) return status('generate first'); status('encoding gif...');

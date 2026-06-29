@@ -188,7 +188,7 @@ const skel = makeSkel();
 function updateSkel(P){ for(let i=0;i<22;i++) skel.joints[i].position.set(P[i][0],P[i][1],P[i][2]);
   for(const {mesh,j} of skel.bones){ va.set(P[PARENTS[j]][0],P[PARENTS[j]][1],P[PARENTS[j]][2]); vb.set(P[j][0],P[j][1],P[j][2]); vd.subVectors(vb,va); const len=vd.length()||1e-6; mesh.position.copy(va).addScaledVector(vd,0.5); mesh.scale.set(1,len,1); mesh.quaternion.setFromUnitVectors(up,vd.normalize()); } }
 
-let PARENTS = PARENTS_DEF, joints = null, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '', loaded = false, yGround = 0;
+let PARENTS = PARENTS_DEF, joints = null, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '', loaded = false, bindH = 0.69;
 
 const _fv = new THREE.Vector3(), FOOTB = ['mixamorigLeftToeBase','mixamorigRightToeBase','mixamorigLeftFoot','mixamorigRightFoot'];
 function placeRobot(inst, P) {
@@ -242,6 +242,7 @@ $('vary').onclick = () => generate();        // same prompt, new seed -> a diffe
 
 new GLTFLoader().load(ROBOT_URL, (g) => {
   const original = g.scene; original.updateMatrixWorld(true);
+  bindH = new THREE.Box3().setFromObject(original).getSize(new THREE.Vector3()).y || 0.69;   // robot bind height
   const byName = {}; original.traverse(o => { if (o.isBone) byName[o.name] = o; });
   for (const n in byName) bindQ[n] = byName[n].getWorldQuaternion(new THREE.Quaternion());
   for (const [bn,cn] of ENTRIES) { const pb=byName[bn].getWorldPosition(new THREE.Vector3()), pc=byName[cn].getWorldPosition(new THREE.Vector3()); bindDir[bn]=pc.sub(pb).normalize(); }
@@ -263,6 +264,8 @@ async function generate() {
       body: JSON.stringify({ prompt:$('prompt').value, guidance:+$('guidance').value, length:+$('length').value, smooth:+$('smooth').value, mesh:false, seed:Math.floor(Math.random()*1e6) }) });
     const d = await r.json();
     joints = d.joints; PARENTS = d.parents || PARENTS_DEF; fps = d.fps || 20; nframes = joints.length; prompt = d.prompt;
+    let Hs = 0; for (const Pf of joints) { let mn=1e9, mx=-1e9; for (const p of Pf) { mn=Math.min(mn,p[1]); mx=Math.max(mx,p[1]); } if (mx-mn>Hs) Hs=mx-mn; }
+    for (const r of allRobots) r.root.scale.setScalar(Hs / bindH);     // match the robot to the skeleton's (person's) height
     every = Math.max(2, Math.round(nframes/24)); frameCamera(); nextColor();
     $('frame').max = nframes-1; playing=true; $('play').textContent='pause'; setFrame(0);
     $('cap').textContent = '"'+d.prompt+'"'; $('cap').style.opacity = 1;

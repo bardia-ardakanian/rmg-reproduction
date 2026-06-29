@@ -46,6 +46,16 @@
     <button id="gen">generate</button>
     <div class="chk"><input type="checkbox" id="showGhost" checked><label for="showGhost" style="margin:0">motion ghosts (trail)</label></div>
     <div class="chk"><input type="checkbox" id="showSkel"><label for="showSkel" style="margin:0">skeleton instead of body</label></div>
+    <div class="chk"><input type="checkbox" id="showShadow" checked><label for="showShadow" style="margin:0">ground shadow</label></div>
+    <label>body color</label>
+    <select id="bodyColor" style="width:100%;padding:7px;border-radius:6px;border:1px solid #d1d5db;background:#fff">
+      <option value="0x86d96b">light green</option>
+      <option value="0xe8c84d">yellow</option>
+      <option value="0xb586e0">purple</option>
+      <option value="0x5bc7c0">teal</option>
+      <option value="0xe8975a">orange</option>
+      <option value="0xb3bdd1">gray</option>
+    </select>
     <div class="row">
       <button class="sec" id="savePng">save png</button>
       <button class="sec" id="saveGif">save gif</button>
@@ -72,8 +82,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-// ---- look (mirrors src/render_mannequin.py: smpl-x body, gray clay, fading ghosts, light scene) ----
-const CLAY = 0xb3bdd1, FLOOR = 0xe0e0e8, BG = 0xf2f2f7;
+// ---- look (mirrors src/render_mannequin.py: smpl-x body, fading ghosts, light scene) ----
+let bodyColor = 0x86d96b;                      // bright by default for visibility; switchable in the panel
+const FLOOR = 0xe0e0e8, BG = 0xf2f2f7;
 const PARENTS_DEF = [-1,0,0,0,1,2,3,4,5,6,7,8,9,9,9,12,13,14,16,17,18,19];
 const N_GHOST = 6;
 
@@ -101,10 +112,12 @@ const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshSta
 ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
 
 // ---- smpl-x body meshes (the server fits the mesh; we just swap vertices per frame) ----
+const bodyMats = [];
 function makeBody(opacity, shadow) {
   const geo = new THREE.BufferGeometry();
-  const mat = new THREE.MeshStandardMaterial({ color: CLAY, roughness: 0.72, metalness: 0.0, side: THREE.DoubleSide });
+  const mat = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.72, metalness: 0.0, side: THREE.DoubleSide });
   if (opacity < 1) { mat.transparent = true; mat.opacity = opacity; mat.depthWrite = false; }
+  bodyMats.push(mat);
   const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = shadow; mesh.visible = false; scene.add(mesh);
   return { mesh, geo };
 }
@@ -170,11 +183,13 @@ addEventListener('resize', resize); resize(); requestAnimationFrame(loop);
 function frameCamera() {
   let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9,mnz=1e9,mxz=-1e9;
   for (const P of joints) for (const p of P) { mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]);mnz=Math.min(mnz,p[2]);mxz=Math.max(mxz,p[2]); }
+  const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2;                   // aim at the trajectory centre (motion isn't centred on origin)
   const H=mxy-mny, W=Math.max(mxx-mnx, mxz-mnz)+0.6, fov=camera.fov*Math.PI/180;
-  const dist=Math.max(2.6, (H+0.5)/2/Math.tan(fov/2), (W/2)/Math.tan(fov/2))*1.2;
-  const ty=H*0.46+0.1, az=-32*Math.PI/180, el=13*Math.PI/180;
-  controls.target.set(0, ty, 0);
-  camera.position.set(dist*Math.cos(el)*Math.sin(az), ty+dist*Math.sin(el), dist*Math.cos(el)*Math.cos(az));
+  const aspect=Math.max(0.4, (view.clientWidth/view.clientHeight)||1.6), th=Math.tan(fov/2);
+  const dist=Math.max(2.6, (H+0.5)/2/th, (W/2)/(th*aspect))*1.15;   // fit width too, accounting for aspect
+  const ty=mny+H*0.46+0.1, az=-32*Math.PI/180, el=13*Math.PI/180;
+  controls.target.set(cx, ty, cz);
+  camera.position.set(cx+dist*Math.cos(el)*Math.sin(az), ty+dist*Math.sin(el), cz+dist*Math.cos(el)*Math.cos(az));
   controls.update();
 }
 
@@ -183,6 +198,8 @@ for (const [el, out] of [['guidance','gv'],['length','lv'],['smooth','sv']]) $(e
 ['walks forward','sits down','is jumping','waves with the right hand','runs in a circle','kicks with the left leg']
   .forEach(p => { const c = document.createElement('span'); c.className = 'chip'; c.textContent = p; c.onclick = () => $('prompt').value = 'a person ' + p; $('chips').appendChild(c); });
 $('showGhost').onchange = $('showSkel').onchange = () => setFrame(frame);
+$('bodyColor').onchange = () => { bodyColor = parseInt($('bodyColor').value, 16); for (const m of bodyMats) m.color.setHex(bodyColor); };
+$('showShadow').onchange = () => { nowBody.mesh.castShadow = $('showShadow').checked; key.shadow.needsUpdate = true; };
 $('frame').oninput = e => { playing = false; $('play').textContent = 'play'; setFrame(+e.target.value); };
 $('play').onclick = () => { playing = !playing; $('play').textContent = playing ? 'pause' : 'play'; };
 

@@ -27,7 +27,9 @@ from PIL import Image, ImageDraw, ImageFont
 PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19]
 SPINE = [(0, 3), (3, 6), (6, 9), (9, 12)]
 HEAD_J = 15
-CLAY = [0.70, 0.74, 0.82]
+COLORS = {"green": [0.53, 0.85, 0.42], "yellow": [0.91, 0.78, 0.30], "purple": [0.71, 0.53, 0.88],
+          "teal": [0.36, 0.78, 0.75], "orange": [0.91, 0.59, 0.35], "gray": [0.70, 0.74, 0.82]}
+CLAY = list(COLORS["green"])          # bright by default for visibility; matches the web demo (--color to change)
 FLOOR = [0.88, 0.88, 0.91]
 FOV = np.pi / 3.8
 
@@ -212,6 +214,7 @@ def main():
     ap.add_argument("--joints", default="report/mesh_joints.npz")
     ap.add_argument("--mode", choices=["montage", "gif"], default="montage")
     ap.add_argument("--body", choices=["smplx", "capsule"], default="smplx")
+    ap.add_argument("--color", choices=list(COLORS), default="green")
     ap.add_argument("--model_path", default=os.environ.get("SMPLX_PATH", "models/smplx"))
     ap.add_argument("--iters", type=int, default=400)
     ap.add_argument("--res", type=int, default=540)
@@ -226,6 +229,7 @@ def main():
     ap.add_argument("--out", default="report")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    CLAY[:] = COLORS[a.color]
     dev = "cuda" if a.body == "smplx" and __import__("torch").cuda.is_available() else "cpu"
 
     d = np.load(a.joints, allow_pickle=True)

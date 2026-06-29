@@ -1,17 +1,18 @@
 """
-Artist-mannequin / ragdoll renderer (paper Figure 1 look), driven purely by joint positions.
+Body renderer (paper Figure 1 look), driven by generated joints, with onion-skin "ghosts".
 
-A smooth gray mannequin built from capsules (limbs + torso) and ball joints + an ovoid head, rendered
-3/4 from the top-left with onion-skin "ghosts": past poses are left behind and fade out with age, so a
-walk spreads across the floor instead of walking out of frame. Two modes:
+The paper renders a SMPL body (Loper et al. 2015). We do the same: fit SMPL-X to the generated joints and
+render it as a smooth gray clay body, 3/4 from the top-left, with past poses left behind as fading ghosts
+so a walk spreads across the floor instead of walking out of frame. `--body capsule` falls back to a plain
+capsule figure (no body model needed). Two modes:
 
   --mode montage : one still PNG, K evenly spaced poses fading oldest->newest, with the prompt caption.
   --mode gif     : animation where each frame trails a few fading ghosts of the recent poses.
 
-Runs in an env with pyrender + trimesh (EGL headless) + PIL. Input = report/mesh_joints.npz (P,L,22,3).
+Runs in an env with smplx + pyrender (EGL headless) + PIL. Input = report/mesh_joints.npz (P,L,22,3).
 
-    python render_mannequin.py --joints report/mesh_joints.npz --mode montage --out report
-    python render_mannequin.py --joints report/mesh_joints.npz --mode gif     --out report
+    python render_mannequin.py --joints report/mesh_joints.npz --mode montage --model_path $SMPLX_PATH --out report
+    python render_mannequin.py --joints report/mesh_joints.npz --mode gif     --model_path $SMPLX_PATH --out report
 """
 import argparse
 import os
@@ -24,10 +25,11 @@ import imageio
 from PIL import Image, ImageDraw, ImageFont
 
 PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19]
-SPINE = [(0, 3), (3, 6), (6, 9), (9, 12)]      # torso column
+SPINE = [(0, 3), (3, 6), (6, 9), (9, 12)]
 HEAD_J = 15
-CLAY = [0.70, 0.74, 0.82]                      # cool gray mannequin, clearly above the floor tone
+CLAY = [0.70, 0.74, 0.82]
 FLOOR = [0.88, 0.88, 0.91]
+FOV = np.pi / 3.8
 
 
 def look_at(eye, target, up=(0, 1, 0)):
@@ -52,57 +54,35 @@ def smooth_time(x, win=9):
     return np.stack([np.convolve(xp[:, c], k, mode="valid") for c in range(xf.shape[1])], 1).reshape(sh)
 
 
+# --------------------------------------------------------------------------- capsule fallback mannequin
 def _capsule(a, b, r):
-    seg = np.linalg.norm(b - a)
-    if seg < 1e-5:
+    if np.linalg.norm(b - a) < 1e-5:
         return trimesh.creation.icosphere(radius=r, subdivisions=2).apply_translation(a)
     c = trimesh.creation.cylinder(radius=r, segment=[a, b], sections=16)
     caps = [trimesh.creation.icosphere(radius=r, subdivisions=2).apply_translation(p) for p in (a, b)]
     return trimesh.util.concatenate([c] + caps)
 
 
-def mannequin(P, scale=1.0):
-    """Build one smooth gray mannequin mesh from 22 joint positions."""
-    r_limb, r_ball, r_torso, r_head = 0.062 * scale, 0.072 * scale, 0.115 * scale, 0.135 * scale
+def capsule_mesh(P):
+    rl, rb, rt, rh = 0.062, 0.072, 0.115, 0.135
     parts = []
-    for j, p in enumerate(PARENTS):                          # limbs
+    for j, p in enumerate(PARENTS):
         if p >= 0 and (j, p) not in SPINE and (p, j) not in SPINE:
-            parts.append(_capsule(P[p], P[j], r_limb))
-    for a, b in SPINE:                                       # thicker torso column
-        parts.append(_capsule(P[a], P[b], r_torso))
-    parts.append(_capsule(P[1], P[2], r_torso * 0.8))        # pelvis width
-    parts.append(_capsule(P[16], P[17], r_torso * 0.7))      # shoulder width
-    for j in [0, 1, 2, 4, 5, 7, 8, 12, 16, 17, 18, 19, 20, 21]:   # ball joints
-        parts.append(trimesh.creation.icosphere(radius=r_ball, subdivisions=2).apply_translation(P[j]))
-    head = trimesh.creation.icosphere(radius=r_head, subdivisions=3)
+            parts.append(_capsule(P[p], P[j], rl))
+    for a, b in SPINE:
+        parts.append(_capsule(P[a], P[b], rt))
+    parts.append(_capsule(P[1], P[2], rt * 0.8)); parts.append(_capsule(P[16], P[17], rt * 0.7))
+    for j in [0, 1, 2, 4, 5, 7, 8, 12, 16, 17, 18, 19, 20, 21]:
+        parts.append(trimesh.creation.icosphere(radius=rb, subdivisions=2).apply_translation(P[j]))
+    head = trimesh.creation.icosphere(radius=rh, subdivisions=3)
     head.apply_scale([0.9, 1.2, 0.95]); head.apply_translation(P[HEAD_J] + np.array([0, 0.04, 0]))
     parts.append(head)
     return trimesh.util.concatenate(parts)
 
 
-def _font(size):
-    try:
-        import matplotlib.font_manager as fm
-        return ImageFont.truetype(fm.findfont(fm.FontProperties(weight="bold")), size)
-    except Exception:
-        return ImageFont.load_default()
-
-
-def caption(img, text, pad=0.14):
-    """Add a caption strip with the prompt under the image (good-sized bold text)."""
-    h, w = img.shape[:2]
-    bar = int(h * pad)
-    canvas = Image.new("RGB", (w, h + bar), (247, 247, 250))
-    canvas.paste(Image.fromarray(img), (0, 0))
-    d = ImageDraw.Draw(canvas)
-    f = _font(int(bar * 0.42))
-    t = '"' + text + '"'
-    tw = d.textbbox((0, 0), t, font=f)[2]
-    d.text(((w - tw) / 2, h + bar * 0.28), t, fill=(40, 42, 48), font=f)
-    return np.array(canvas)
-
-
-FOV = np.pi / 3.8
+# --------------------------------------------------------------------------- rendering
+def _mat(rgb, rough=0.72):
+    return pyrender.MetallicRoughnessMaterial(baseColorFactor=rgb + [1.0], metallicFactor=0.0, roughnessFactor=rough)
 
 
 class Renderer:
@@ -119,16 +99,17 @@ class Renderer:
     def _down(self, a):
         return np.array(Image.fromarray(a).resize((self.res, self.res), Image.LANCZOS))
 
-    def ground(self, center):
+    def _cam(self, sc):
+        sc.add(pyrender.PerspectiveCamera(yfov=FOV), pose=look_at(self.eye, self.target))
+
+    def ground(self):
         sc = pyrender.Scene(bg_color=[0.95, 0.95, 0.97, 1.0], ambient_light=[0.6, 0.6, 0.6])
-        g = trimesh.creation.box(extents=[16, 0.02, 16]); g.apply_translation([center[0], -0.01, center[2]])
+        g = trimesh.creation.box(extents=[16, 0.02, 16]); g.apply_translation([0, -0.01, 0])
         sc.add(pyrender.Mesh.from_trimesh(g, material=_mat(FLOOR, rough=1.0)))
-        self._cam(sc)
-        sc.add(pyrender.DirectionalLight(color=[1, 1, 1], intensity=2.0), pose=self.key)
+        self._cam(sc); sc.add(pyrender.DirectionalLight(color=[1, 1, 1], intensity=2.0), pose=self.key)
         return self._down(self.r.render(sc)[0])
 
     def body(self, mesh):
-        """Render the mannequin alone; return (rgb, mask) at output res. Low ambient -> visible 3D form."""
         sc = pyrender.Scene(bg_color=[0.95, 0.95, 0.97, 1.0], ambient_light=[0.40, 0.40, 0.44])
         sc.add(pyrender.Mesh.from_trimesh(mesh, material=_mat(CLAY), smooth=True))
         self._cam(sc)
@@ -137,16 +118,8 @@ class Renderer:
         col, dep = self.r.render(sc)
         return self._down(col), self._down((dep > 0).astype(np.float32) * 255)[..., None] / 255.0
 
-    def _cam(self, sc):
-        sc.add(pyrender.PerspectiveCamera(yfov=FOV), pose=look_at(self.eye, self.target))
-
-
-def _mat(rgb, rough=0.75):
-    return pyrender.MetallicRoughnessMaterial(baseColorFactor=rgb + [1.0], metallicFactor=0.0, roughnessFactor=rough)
-
 
 def composite(bg, layers):
-    """Painter's compositing: layers = [(rgb, mask, alpha)] oldest->newest over bg."""
     acc = bg.astype(np.float32).copy()
     for rgb, mask, alpha in layers:
         a = mask * alpha
@@ -154,46 +127,81 @@ def composite(bg, layers):
     return acc.clip(0, 255).astype(np.uint8)
 
 
-def fit_view(Jc, margin=1.20):
-    """Camera distance + target height so the whole motion (xz trajectory AND jump height) fits.
-    Jc is already floor-dropped and xz-centered. +0.55 covers the head/arm caps above the top joint."""
-    H = float(Jc[..., 1].max())
-    W = float(max(Jc[..., 0].ptp(), Jc[..., 2].ptp())) + 0.9           # + body footprint
-    vert = H + 0.55
+def _font(size):
+    try:
+        import matplotlib.font_manager as fm
+        return ImageFont.truetype(fm.findfont(fm.FontProperties(weight="bold")), size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def caption(img, text, pad=0.13):
+    h, w = img.shape[:2]
+    bar = int(h * pad)
+    canvas = Image.new("RGB", (w, h + bar), (247, 247, 250))
+    canvas.paste(Image.fromarray(img), (0, 0))
+    d = ImageDraw.Draw(canvas)
+    f = _font(int(bar * 0.44))
+    t = '"' + text + '"'
+    tw = d.textbbox((0, 0), t, font=f)[2]
+    d.text(((w - tw) / 2, h + bar * 0.26), t, fill=(40, 42, 48), font=f)
+    return np.array(canvas)
+
+
+def fit_view(pts, margin=1.20):
+    """pts (.., 3) already floor-dropped + xz-centered. Returns (dist, target_y)."""
+    H = float(pts[..., 1].max())
+    W = float(max(pts[..., 0].ptp(), pts[..., 2].ptp())) + 0.5
+    vert = H + 0.45
     th = np.tan(FOV / 2)
-    dist = max(2.5, (vert / 2) / th, (W / 2) / th) * margin
-    return dist, H * 0.46 + 0.1
+    return max(2.5, (vert / 2) / th, (W / 2) / th) * margin, H * 0.46 + 0.1
 
 
-def render_one(J, prompt, mode, out, idx, fps, n_ghost, every, res, azim, elev, dist_override):
-    L = J.shape[0]
-    # recenter the whole clip so its trajectory is centered on the origin (keeps it framed)
-    Jc = J.copy()
-    floor = Jc[..., 1].min(); Jc[..., 1] -= floor
-    ctr = np.array([Jc[..., 0].mean(), 0, Jc[..., 2].mean()]); Jc[..., 0] -= ctr[0]; Jc[..., 2] -= ctr[2]
-    dist, ty = fit_view(Jc)
+# --------------------------------------------------------------------------- per-clip mesh providers
+def smplx_fit_clip(J_clip, model_path, dev, iters):
+    """Fit SMPL-X to the clip's joints once; return (verts (L,V,3), faces)."""
+    import torch
+    import smplx
+    from fit_render_mesh import fit as smplx_fit
+    L = J_clip.shape[0]
+    bm = smplx.create(model_path, model_type="smplx", gender="neutral", ext="npz",
+                      use_pca=False, flat_hand_mean=True, batch_size=L).to(dev)
+    verts, faces, mpjpe = smplx_fit(bm, torch.tensor(J_clip, dtype=torch.float32, device=dev), dev, iters)
+    print(f"   smpl-x fit MPJPE {mpjpe*1000:.1f}mm")
+    return verts, faces
+
+
+def render_one(pts, frame_mesh, prompt, mode, out, idx, res, azim, elev, dist_override,
+               n_ghost, every, fps):
+    L = pts.shape[0]
+    floor = pts[..., 1].min()
+    cx, cz = pts[..., 0].mean(), pts[..., 2].mean()
+    shift = np.array([-cx, -floor, -cz])
+    ptsc = pts + shift
+    dist, ty = fit_view(ptsc)
     R = Renderer(res, azim, elev, dist_override or dist, target_y=ty)
-    bg = R.ground(np.array([0, 0, 0]))
+    bg = R.ground()
     slug = "".join(c if c.isalnum() else "_" for c in prompt)[:28]
+
+    def layer(f, alpha):
+        m = frame_mesh(f); m.apply_translation(shift)
+        rgb, mask = R.body(m)
+        return (rgb, mask, alpha)
 
     if mode == "montage":
         sel = np.linspace(0, L - 1, n_ghost).astype(int)
-        alphas = np.linspace(0.16, 1.0, len(sel)) ** 1.3
-        alphas = 0.14 + (1 - 0.14) * (alphas - alphas.min()) / (alphas.max() - alphas.min())
-        layers = [(*R.body(mannequin(Jc[f])), a) for f, a in zip(sel, alphas)]
-        img = caption(composite(bg, layers), prompt)
+        al = np.linspace(0, 1, len(sel)) ** 1.3
+        al = 0.14 + (1 - 0.14) * al
+        img = caption(composite(bg, [layer(f, a) for f, a in zip(sel, al)]), prompt)
         imageio.imwrite(os.path.join(out, f"mannequin_{idx}_{slug}.png"), img)
         print(f"wrote mannequin_{idx}_{slug}.png | {prompt}")
     else:
         frames = []
         for t in range(L):
-            ages = [k for k in range(every * n_ghost, 0, -every) if t - k >= 0]   # oldest..newest ghost
-            layers = []
-            for k in ages:
-                a = 0.10 + 0.30 * (1 - k / (every * n_ghost))
-                layers.append((*R.body(mannequin(Jc[t - k])), a))
-            layers.append((*R.body(mannequin(Jc[t])), 1.0))
-            frames.append(caption(composite(bg, layers), prompt))
+            ks = [k for k in range(every * n_ghost, 0, -every) if t - k >= 0]
+            ly = [layer(t - k, 0.10 + 0.30 * (1 - k / (every * n_ghost))) for k in ks]
+            ly.append(layer(t, 1.0))
+            frames.append(caption(composite(bg, ly), prompt))
         imageio.mimsave(os.path.join(out, f"mannequin_{idx}_{slug}.gif"), frames, fps=fps)
         print(f"wrote mannequin_{idx}_{slug}.gif | {prompt}")
     R.r.delete()
@@ -203,18 +211,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--joints", default="report/mesh_joints.npz")
     ap.add_argument("--mode", choices=["montage", "gif"], default="montage")
+    ap.add_argument("--body", choices=["smplx", "capsule"], default="smplx")
+    ap.add_argument("--model_path", default=os.environ.get("SMPLX_PATH", "models/smplx"))
+    ap.add_argument("--iters", type=int, default=400)
     ap.add_argument("--res", type=int, default=540)
     ap.add_argument("--fps", type=int, default=20)
     ap.add_argument("--azim", type=float, default=-32.0)
     ap.add_argument("--elev", type=float, default=13.0)
-    ap.add_argument("--dist", type=float, default=0.0, help="0 = auto-fit to the trajectory")
+    ap.add_argument("--dist", type=float, default=0.0)
     ap.add_argument("--ghosts", type=int, default=6, help="montage: # poses; gif: # trailing ghosts")
-    ap.add_argument("--every", type=int, default=6, help="gif: frames between ghosts")
+    ap.add_argument("--every", type=int, default=6)
     ap.add_argument("--smooth", type=int, default=9)
-    ap.add_argument("--only", type=int, default=-1, help="render only clip i (-1 = all)")
+    ap.add_argument("--only", type=int, default=-1)
     ap.add_argument("--out", default="report")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    dev = "cuda" if a.body == "smplx" and __import__("torch").cuda.is_available() else "cpu"
+
     d = np.load(a.joints, allow_pickle=True)
     J, prompts = d["joints"], list(d["prompts"])
     J = np.stack([smooth_time(J[i], a.smooth) for i in range(J.shape[0])])
@@ -222,9 +235,15 @@ def main():
     for i in range(J.shape[0]):
         if a.only >= 0 and i != a.only:
             continue
-        Ji = J[i] @ rot.T
-        render_one(Ji, prompts[i], a.mode, a.out, i, a.fps, a.ghosts, a.every,
-                   a.res, a.azim, a.elev, a.dist)
+        if a.body == "smplx":
+            verts, faces = smplx_fit_clip(J[i], a.model_path, dev, a.iters)
+            pts = verts @ rot.T
+            fm = lambda f, P=pts, F=faces: trimesh.Trimesh(P[f], F, process=False)
+        else:
+            pts = J[i] @ rot.T
+            fm = lambda f, P=pts: capsule_mesh(P[f])
+        render_one(pts, fm, prompts[i], a.mode, a.out, i, a.res, a.azim, a.elev, a.dist,
+                   a.ghosts, a.every, a.fps)
 
 
 if __name__ == "__main__":

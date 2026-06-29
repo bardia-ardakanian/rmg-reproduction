@@ -82,21 +82,21 @@ everything renders from the generated joints, 3/4 camera with a ground shadow.
 
 ```bash
 python src/rmg_gen_smpl.py      --ckpt runs/rmg_base/model.pth --out figures/joints.npz   # generate + export joints
-python src/render_mannequin.py  --joints figures/joints.npz --mode montage --out figures  # paper-style mannequin + ghost trail (png)
+python src/render_mannequin.py  --joints figures/joints.npz --mode montage --out figures  # smpl-x body + ghost trail (png)
 python src/render_mannequin.py  --joints figures/joints.npz --mode gif     --out figures  # same, animated
-python src/render_body.py       --joints figures/joints.npz --mode both --out figures     # plain capsule body or joints+skeleton
-python src/fit_render_mesh.py   --joints figures/joints.npz --out figures                 # smpl-x body mesh (needs smplx)
+python src/render_body.py       --joints figures/joints.npz --mode both --out figures     # capsule body or joints+skeleton (no smplx)
 ```
 
-render_mannequin is the one the web demo mirrors: a smooth gray artist mannequin built straight from the
-joints (no body model needed), shown the way the paper's figure 1 does it, a few poses across the motion
-left behind as fading ghosts, zoomed out so a walk tracks across the floor instead of wandering off frame,
-prompt baked in at the bottom. all of them smooth the joints over time (`--smooth`, default 9) so it doesnt
-jitter, pass `--smooth 0` to turn it off.
+render_mannequin is the one the web demo mirrors. the paper renders a smpl body (loper et al. 2015), so we
+do the same: fit smpl-x to the generated joints and render it as a smooth gray clay body, shown the way
+figure 1 does it, with a few poses across the motion left behind as fading ghosts, zoomed out so a walk
+tracks across the floor instead of wandering off frame, prompt baked in at the bottom. point `SMPLX_PATH`
+at your smpl-x models (in config.sh). `--body capsule` skips the body model and draws a plain capsule
+figure instead. everything smooths the joints over time (`--smooth`, default 9) so it doesnt jitter.
 
 ### samples
 
-rendered by render_mannequin.py (montage mode), the same mannequin + ghost look the web demo shows and
+rendered by render_mannequin.py (montage mode), the same smpl-x body + ghost look the web demo shows and
 what its "save png / save gif" exports:
 
 | | | |

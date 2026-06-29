@@ -45,7 +45,7 @@
     <input type="range" id="smooth" min="0" max="19" step="1" value="9">
     <button id="gen">generate</button>
     <div class="chk"><input type="checkbox" id="showGhost" checked><label for="showGhost" style="margin:0">motion ghosts (trail)</label></div>
-    <div class="chk"><input type="checkbox" id="showSkel"><label for="showSkel" style="margin:0">skeleton instead of mannequin</label></div>
+    <div class="chk"><input type="checkbox" id="showSkel"><label for="showSkel" style="margin:0">skeleton instead of body</label></div>
     <div class="row">
       <button class="sec" id="savePng">save png</button>
       <button class="sec" id="saveGif">save gif</button>
@@ -72,11 +72,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-// ---- look (mirrors src/render_mannequin.py so the web tool and the README match) ----
+// ---- look (mirrors src/render_mannequin.py: smpl-x body, gray clay, fading ghosts, light scene) ----
 const CLAY = 0xb3bdd1, FLOOR = 0xe0e0e8, BG = 0xf2f2f7;
 const PARENTS_DEF = [-1,0,0,0,1,2,3,4,5,6,7,8,9,9,9,12,13,14,16,17,18,19];
-const SPINE_CHILD = new Set([3,6,9,12]);
-const BALLS = new Set([0,1,2,4,5,7,8,12,16,17,18,19,20,21]);
 const N_GHOST = 6;
 
 const $ = id => document.getElementById(id);
@@ -102,43 +100,21 @@ const fill = new THREE.DirectionalLight(0xffffff, 0.7); fill.position.set(-3, 2,
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: FLOOR, roughness: 1 }));
 ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
 
-// ---- mannequin built from joints (one opaque "now" + N fading ghosts) ----
-const up = new THREE.Vector3(0, 1, 0), va = new THREE.Vector3(), vb = new THREE.Vector3(), vd = new THREE.Vector3();
-function buildMannequin(opacity, shadow) {
-  const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: CLAY, roughness: 0.78, metalness: 0.0 });
+// ---- smpl-x body meshes (the server fits the mesh; we just swap vertices per frame) ----
+function makeBody(opacity, shadow) {
+  const geo = new THREE.BufferGeometry();
+  const mat = new THREE.MeshStandardMaterial({ color: CLAY, roughness: 0.72, metalness: 0.0, side: THREE.DoubleSide });
   if (opacity < 1) { mat.transparent = true; mat.opacity = opacity; mat.depthWrite = false; }
-  const bones = [], balls = [];
-  for (let j = 1; j < 22; j++) {                                  // limb + spine bones
-    const r = SPINE_CHILD.has(j) ? 0.115 : 0.062;
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 1, 14), mat); m.castShadow = shadow; g.add(m); bones.push({ m, j, p: PARENTS_DEF[j] });
-  }
-  const pelvis = new THREE.Mesh(new THREE.CylinderGeometry(0.092, 0.092, 1, 14), mat); pelvis.castShadow = shadow; g.add(pelvis); bones.push({ m: pelvis, p: 1, j: 2 });
-  const shoul = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1, 14), mat); shoul.castShadow = shadow; g.add(shoul); bones.push({ m: shoul, p: 16, j: 17 });
-  for (let j = 0; j < 22; j++) {                                  // ball joints / caps
-    if (j === 15) continue;
-    const r = BALLS.has(j) ? 0.072 : 0.062;
-    const s = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 16), mat); s.castShadow = shadow; g.add(s); balls.push({ s, j });
-  }
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.135, 20, 20), mat); head.scale.set(0.9, 1.2, 0.95); head.castShadow = shadow; g.add(head);
-  scene.add(g);
-  function set(P) {
-    for (const { m, j, p } of bones) {
-      va.set(P[p][0], P[p][1], P[p][2]); vb.set(P[j][0], P[j][1], P[j][2]);
-      vd.subVectors(vb, va); const len = vd.length() || 1e-6;
-      m.position.copy(va).addScaledVector(vd, 0.5); m.scale.set(1, len, 1);
-      m.quaternion.setFromUnitVectors(up, vd.normalize());
-    }
-    for (const { s, j } of balls) s.position.set(P[j][0], P[j][1], P[j][2]);
-    head.position.set(P[15][0], P[15][1] + 0.04, P[15][2]);
-  }
-  return { g, set };
+  const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = shadow; mesh.visible = false; scene.add(mesh);
+  return { mesh, geo };
 }
-const now = buildMannequin(1, true);
-const ghosts = [];
-for (let i = 0; i < N_GHOST; i++) ghosts.push(buildMannequin(0.12 + 0.26 * (1 - i / N_GHOST), false));
+const nowBody = makeBody(1, true);
+const ghostBodies = [];
+for (let i = 0; i < N_GHOST; i++) ghostBodies.push(makeBody(0.12 + 0.26 * (1 - i / N_GHOST), false));
+const allBodies = [nowBody, ...ghostBodies];
 
 // ---- skeleton (alternate view) ----
+const up = new THREE.Vector3(0, 1, 0), va = new THREE.Vector3(), vb = new THREE.Vector3(), vd = new THREE.Vector3();
 function makeSkel() {
   const g = new THREE.Group();
   const jm = new THREE.MeshStandardMaterial({ color: 0xc23b3b, roughness: .6 });
@@ -150,8 +126,14 @@ function makeSkel() {
 }
 const skel = makeSkel();
 
-let PARENTS = PARENTS_DEF, joints = null, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '';
+let PARENTS = PARENTS_DEF, joints = null, verts = null, V = 0, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '';
 
+function setBody(body, f) {
+  if (!verts) { body.mesh.visible = false; return; }
+  if (!body.geo.attributes.position) return;
+  body.geo.attributes.position.array.set(verts.subarray(f * V * 3, (f + 1) * V * 3));
+  body.geo.attributes.position.needsUpdate = true; body.geo.computeVertexNormals();
+}
 function updateSkel(P) {
   for (let i = 0; i < 22; i++) skel.joints[i].position.set(P[i][0], P[i][1], P[i][2]);
   for (const { mesh, j } of skel.bones) {
@@ -165,13 +147,13 @@ function setFrame(f) {
   if (!joints) return;
   frame = Math.max(0, Math.min(nframes - 1, Math.round(f)));
   const useSkel = $('showSkel').checked, useGhost = $('showGhost').checked && !useSkel;
-  skel.g.visible = useSkel; now.g.visible = !useSkel;
-  if (useSkel) updateSkel(joints[frame]); else now.set(joints[frame]);
+  skel.g.visible = useSkel;
+  nowBody.mesh.visible = !useSkel && !!verts;
+  if (useSkel) updateSkel(joints[frame]); else setBody(nowBody, frame);
   for (let i = 0; i < N_GHOST; i++) {
-    const gf = frame - (i + 1) * every;
-    const on = useGhost && gf >= 0;
-    ghosts[i].g.visible = on;
-    if (on) ghosts[i].set(joints[gf]);
+    const gf = frame - (i + 1) * every, on = useGhost && gf >= 0 && !!verts;
+    ghostBodies[i].mesh.visible = on;
+    if (on) setBody(ghostBodies[i], gf);
   }
   $('frame').value = frame; $('fc').textContent = (frame + 1) + '/' + nframes;
 }
@@ -185,14 +167,11 @@ function loop(t) {
 function resize() { const w = view.clientWidth, h = view.clientHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize(); requestAnimationFrame(loop);
 
-// center the trajectory on the origin + frame the camera so the whole motion stays visible
 function frameCamera() {
-  let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,minz=1e9,maxz=-1e9;
-  for (const P of joints) for (const p of P) { minx=Math.min(minx,p[0]);maxx=Math.max(maxx,p[0]);miny=Math.min(miny,p[1]);maxy=Math.max(maxy,p[1]);minz=Math.min(minz,p[2]);maxz=Math.max(maxz,p[2]); }
-  const cx=(minx+maxx)/2, cz=(minz+maxz)/2;
-  for (const P of joints) for (const p of P) { p[0]-=cx; p[1]-=miny; p[2]-=cz; }
-  const H=maxy-miny, W=Math.max(maxx-minx, maxz-minz)+0.9, fov=camera.fov*Math.PI/180;
-  const dist=Math.max(2.6, (H+0.7)/2/Math.tan(fov/2), (W/2)/Math.tan(fov/2))*1.2;
+  let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9,mnz=1e9,mxz=-1e9;
+  for (const P of joints) for (const p of P) { mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]);mnz=Math.min(mnz,p[2]);mxz=Math.max(mxz,p[2]); }
+  const H=mxy-mny, W=Math.max(mxx-mnx, mxz-mnz)+0.6, fov=camera.fov*Math.PI/180;
+  const dist=Math.max(2.6, (H+0.5)/2/Math.tan(fov/2), (W/2)/Math.tan(fov/2))*1.2;
   const ty=H*0.46+0.1, az=-32*Math.PI/180, el=13*Math.PI/180;
   controls.target.set(0, ty, 0);
   camera.position.set(dist*Math.cos(el)*Math.sin(az), ty+dist*Math.sin(el), dist*Math.cos(el)*Math.cos(az));
@@ -207,14 +186,21 @@ $('showGhost').onchange = $('showSkel').onchange = () => setFrame(frame);
 $('frame').oninput = e => { playing = false; $('play').textContent = 'play'; setFrame(+e.target.value); };
 $('play').onclick = () => { playing = !playing; $('play').textContent = playing ? 'pause' : 'play'; };
 
+function b64bytes(s) { const bin = atob(s), n = bin.length, u = new Uint8Array(n); for (let i = 0; i < n; i++) u[i] = bin.charCodeAt(i); return u; }
+
 async function generate() {
-  status('generating...'); $('gen').disabled = true;
+  status('generating (fitting body mesh)...'); $('gen').disabled = true;
   try {
     const r = await fetch('/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: $('prompt').value, guidance: +$('guidance').value, length: +$('length').value,
-        smooth: +$('smooth').value, mesh: false, seed: Math.floor(Math.random() * 1e6) }) });
+        smooth: +$('smooth').value, mesh: true, seed: Math.floor(Math.random() * 1e6) }) });
     const d = await r.json();
     joints = d.joints; PARENTS = d.parents || PARENTS_DEF; fps = d.fps || 20; nframes = joints.length; prompt = d.prompt;
+    if (d.verts) {
+      verts = new Float32Array(b64bytes(d.verts).buffer); V = d.V;
+      const faces = new Uint32Array(b64bytes(d.faces).buffer);
+      for (const b of allBodies) { b.geo.setIndex(new THREE.BufferAttribute(faces.slice(), 1)); b.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(V * 3), 3)); }
+    } else { verts = null; }
     every = Math.max(2, Math.round(nframes / 24));
     frameCamera();
     $('frame').max = nframes - 1; playing = true; $('play').textContent = 'pause'; setFrame(0);

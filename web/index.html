@@ -188,9 +188,19 @@ const skel = makeSkel();
 function updateSkel(P){ for(let i=0;i<22;i++) skel.joints[i].position.set(P[i][0],P[i][1],P[i][2]);
   for(const {mesh,j} of skel.bones){ va.set(P[PARENTS[j]][0],P[PARENTS[j]][1],P[PARENTS[j]][2]); vb.set(P[j][0],P[j][1],P[j][2]); vd.subVectors(vb,va); const len=vd.length()||1e-6; mesh.position.copy(va).addScaledVector(vd,0.5); mesh.scale.set(1,len,1); mesh.quaternion.setFromUnitVectors(up,vd.normalize()); } }
 
-let PARENTS = PARENTS_DEF, joints = null, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '', loaded = false;
+let PARENTS = PARENTS_DEF, joints = null, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '', loaded = false, yGround = 0;
 
-function placeRobot(inst, P) { retarget(inst.bones, P); inst.root.position.set(P[0][0] - hh.x, P[0][1] - hh.y, P[0][2] - hh.z); }
+const _fv = new THREE.Vector3(), FOOTB = ['mixamorigLeftToeBase','mixamorigRightToeBase','mixamorigLeftFoot','mixamorigRightFoot'];
+function placeRobot(inst, P) {
+  // the robot's legs aren't smpl-length, so match its lowest foot to smpl's lowest foot each frame:
+  // keeps feet on the floor when grounded, and still leaves the floor for jumps.
+  retarget(inst.bones, P);
+  inst.root.position.set(P[0][0] - hh.x, 0, P[0][2] - hh.z);
+  inst.root.updateMatrixWorld(true);
+  let rf = 1e9; for (const b of FOOTB) rf = Math.min(rf, inst.bones[b].getWorldPosition(_fv).y);
+  let sf = 1e9; for (const p of P) sf = Math.min(sf, p[1]);
+  inst.root.position.y = sf - rf + 0.02;                          // tiny lift so the sole clears the floor
+}
 function setFrame(f) {
   if (!joints || !loaded) return;
   frame = Math.max(0, Math.min(nframes - 1, Math.round(f)));

@@ -45,6 +45,8 @@
     <input type="range" id="length" min="40" max="196" step="4" value="120">
     <label>smoothing <span class="val" id="sv">9</span></label>
     <input type="range" id="smooth" min="0" max="19" step="1" value="9">
+    <label>zoom <span class="val" id="zv">1.0</span></label>
+    <input type="range" id="zoom" min="0.4" max="2.5" step="0.1" value="1.0">
     <div class="row">
       <button id="gen">generate</button>
       <button id="vary" title="same prompt, a different motion">vary &#8635;</button>
@@ -188,7 +190,7 @@ const skel = makeSkel();
 function updateSkel(P){ for(let i=0;i<22;i++) skel.joints[i].position.set(P[i][0],P[i][1],P[i][2]);
   for(const {mesh,j} of skel.bones){ va.set(P[PARENTS[j]][0],P[PARENTS[j]][1],P[PARENTS[j]][2]); vb.set(P[j][0],P[j][1],P[j][2]); vd.subVectors(vb,va); const len=vd.length()||1e-6; mesh.position.copy(va).addScaledVector(vd,0.5); mesh.scale.set(1,len,1); mesh.quaternion.setFromUnitVectors(up,vd.normalize()); } }
 
-let PARENTS = PARENTS_DEF, joints = null, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '', loaded = false, bindH = 0.69;
+let PARENTS = PARENTS_DEF, joints = null, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '', loaded = false, bindH = 0.69, zoom = 1.0;
 
 const _fv = new THREE.Vector3(), FOOTB = ['mixamorigLeftToeBase','mixamorigRightToeBase','mixamorigLeftFoot','mixamorigRightFoot'];
 function placeRobot(inst, P) {
@@ -221,7 +223,7 @@ function frameCamera(){
   for(const Pf of joints) for(const p of Pf){ mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]);mnz=Math.min(mnz,p[2]);mxz=Math.max(mxz,p[2]); }
   const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2, H=mxy-mny, W=Math.max(mxx-mnx,mxz-mnz)+0.6, fov=camera.fov*Math.PI/180;
   const aspect=Math.max(0.4,(view.clientWidth/view.clientHeight)||1.6), th=Math.tan(fov/2);
-  const dist=Math.max(7.5,(H+0.5)/2/th, Math.min((W/2)/(th*aspect),7.0))*2.6;     // way back (scroll to fine-tune)
+  const dist=Math.max(5.0,(H+0.5)/2/th, Math.min((W/2)/(th*aspect),6.0))*1.95*zoom;  // zoom slider scales it
   const ty=mny+H*0.46+0.1, az=-32*Math.PI/180, el=16*Math.PI/180;
   controls.target.set(cx,ty,cz);
   camera.position.set(cx+dist*Math.cos(el)*Math.sin(az), ty+dist*Math.sin(el), cz+dist*Math.cos(el)*Math.cos(az));
@@ -230,6 +232,7 @@ function frameCamera(){
 
 const status = m => $('status').textContent = m || '';
 for (const [el,out] of [['guidance','gv'],['length','lv'],['smooth','sv']]) $(el).oninput = () => $(out).textContent = $(el).value;
+$('zoom').oninput = () => { zoom = +$('zoom').value; $('zv').textContent = zoom.toFixed(1); if (joints) frameCamera(); };
 ['stands on one leg in yoga pose','does a salsa dance','performs a standing back kick','is dancing','does a moonwalk','walks forward']
   .forEach(p => { const c=document.createElement('span'); c.className='chip'; c.textContent=p; c.onclick=()=>{ $('prompt').value='a person '+p; generate(); }; $('chips').appendChild(c); });
 $('showGhost').onchange = $('showSkel').onchange = () => setFrame(frame);

@@ -22,6 +22,7 @@
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .chip { padding: 4px 8px; background: #eceef2; border: 1px solid #d1d5db; border-radius: 12px; font-size: 11px; cursor: pointer; }
   .chk { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+  select { width: 100%; padding: 7px; border-radius: 6px; border: 1px solid #d1d5db; background: #fff; }
   #status { margin-top: 12px; color: #6b7280; font-size: 12px; min-height: 16px; }
   #view { flex: 1; position: relative; }
   #hud { position: absolute; left: 14px; bottom: 12px; right: 14px; display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,.85); padding: 8px 12px; border-radius: 8px; border: 1px solid #dfe3ea; }
@@ -45,22 +46,22 @@
     <input type="range" id="smooth" min="0" max="19" step="1" value="9">
     <button id="gen">generate</button>
     <div class="chk"><input type="checkbox" id="showGhost" checked><label for="showGhost" style="margin:0">motion ghosts (trail)</label></div>
-    <div class="chk"><input type="checkbox" id="showSkel"><label for="showSkel" style="margin:0">skeleton instead of body</label></div>
+    <div class="chk"><input type="checkbox" id="showSkel"><label for="showSkel" style="margin:0">skeleton instead of robot</label></div>
     <div class="chk"><input type="checkbox" id="showShadow" checked><label for="showShadow" style="margin:0">ground shadow</label></div>
-    <label>body color</label>
-    <select id="bodyColor" style="width:100%;padding:7px;border-radius:6px;border:1px solid #d1d5db;background:#fff">
-      <option value="0x86d96b">light green</option>
+    <label>robot color</label>
+    <select id="bodyColor">
+      <option value="0xdfe3ea">robot white</option>
+      <option value="0x86d96b">green</option>
       <option value="0xe8c84d">yellow</option>
       <option value="0xb586e0">purple</option>
       <option value="0x5bc7c0">teal</option>
       <option value="0xe8975a">orange</option>
-      <option value="0xb3bdd1">gray</option>
     </select>
     <div class="row">
       <button class="sec" id="savePng">save png</button>
       <button class="sec" id="saveGif">save gif</button>
     </div>
-    <div id="status"></div>
+    <div id="status">loading robot...</div>
   </div>
   <div id="view">
     <div id="hud">
@@ -81,180 +82,189 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 
-// ---- look (mirrors src/render_mannequin.py: smpl-x body, fading ghosts, light scene) ----
-let bodyColor = 0x86d96b;                      // bright by default for visibility; switchable in the panel
-const FLOOR = 0xe0e0e8, BG = 0xf2f2f7;
+const ROBOT_URL = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/Xbot.glb';
 const PARENTS_DEF = [-1,0,0,0,1,2,3,4,5,6,7,8,9,9,9,12,13,14,16,17,18,19];
-const N_GHOST = 6;
+const N_GHOST = 5, SCALE = 1.7 / 0.69, FLOOR_TONE = 0xe0e0e8, BG = 0xf2f2f7;
+// mixamo bone -> mixamo child bone -> [smpl parent joint, smpl child joint]
+const ENTRIES = [
+  ['mixamorigSpine','mixamorigSpine1',0,3],['mixamorigSpine1','mixamorigSpine2',3,6],
+  ['mixamorigSpine2','mixamorigNeck',6,9],['mixamorigNeck','mixamorigHead',12,15],
+  ['mixamorigLeftShoulder','mixamorigLeftArm',13,16],['mixamorigLeftArm','mixamorigLeftForeArm',16,18],
+  ['mixamorigLeftForeArm','mixamorigLeftHand',18,20],
+  ['mixamorigRightShoulder','mixamorigRightArm',14,17],['mixamorigRightArm','mixamorigRightForeArm',17,19],
+  ['mixamorigRightForeArm','mixamorigRightHand',19,21],
+  ['mixamorigLeftUpLeg','mixamorigLeftLeg',1,4],['mixamorigLeftLeg','mixamorigLeftFoot',4,7],
+  ['mixamorigLeftFoot','mixamorigLeftToeBase',7,10],
+  ['mixamorigRightUpLeg','mixamorigRightLeg',2,5],['mixamorigRightLeg','mixamorigRightFoot',5,8],
+  ['mixamorigRightFoot','mixamorigRightToeBase',8,11],
+];
 
 const $ = id => document.getElementById(id);
 const view = $('view');
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.setPixelRatio(devicePixelRatio);
+renderer.setPixelRatio(devicePixelRatio); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 view.appendChild(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(BG);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(BG);
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
 camera.position.set(-2.4, 1.7, 3.0);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.9, 0); controls.enableDamping = true;
-
 scene.add(new THREE.HemisphereLight(0xffffff, 0xb8bcc6, 0.85));
-const key = new THREE.DirectionalLight(0xffffff, 2.6);
-key.position.set(3, 6, 2); key.castShadow = true;
+const key = new THREE.DirectionalLight(0xffffff, 2.6); key.position.set(3, 6, 2); key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048); key.shadow.camera.near = 0.5; key.shadow.camera.far = 25;
 key.shadow.camera.left = key.shadow.camera.bottom = -6; key.shadow.camera.right = key.shadow.camera.top = 6;
 key.shadow.bias = -0.0002; scene.add(key);
 const fill = new THREE.DirectionalLight(0xffffff, 0.7); fill.position.set(-3, 2, 1.5); scene.add(fill);
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: FLOOR, roughness: 1 }));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: FLOOR_TONE, roughness: 1 }));
 ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
 
-// ---- smpl-x body meshes (the server fits the mesh; we just swap vertices per frame) ----
-const bodyMats = [];
-function makeBody(opacity, shadow) {
-  const geo = new THREE.BufferGeometry();
-  const mat = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.72, metalness: 0.0, side: THREE.DoubleSide });
-  if (opacity < 1) { mat.transparent = true; mat.opacity = opacity; mat.depthWrite = false; }
-  bodyMats.push(mat);
-  const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = shadow; mesh.visible = false; scene.add(mesh);
-  return { mesh, geo };
-}
-const nowBody = makeBody(1, true);
-const ghostBodies = [];
-for (let i = 0; i < N_GHOST; i++) ghostBodies.push(makeBody(0.12 + 0.26 * (1 - i / N_GHOST), false));
-const allBodies = [nowBody, ...ghostBodies];
+// ---- robot retargeting (validated: every bone direction matches the SMPL pose, dot=1) ----
+const bindQ = {}, bindDir = {};
+let hipsParentQ = new THREE.Quaternion(), hh = new THREE.Vector3();
+const _u = new THREE.Vector3(), _w = new THREE.Vector3();
+const dir = (P,a,b) => _u.set(P[b][0]-P[a][0],P[b][1]-P[a][1],P[b][2]-P[a][2]).normalize().clone();
+const fromTo = (u,v) => new THREE.Quaternion().setFromUnitVectors(u,v);
 
-// ---- skeleton (alternate view) ----
-const up = new THREE.Vector3(0, 1, 0), va = new THREE.Vector3(), vb = new THREE.Vector3(), vd = new THREE.Vector3();
+let robotColor = 0xdfe3ea, now = null, ghosts = [], allRobots = [];
+function makeRobot(original, opacity, shadow) {
+  const root = skeletonClone(original); root.scale.setScalar(SCALE);
+  const bones = {}, mats = [];
+  root.traverse(o => {
+    if (o.isBone) bones[o.name] = o;
+    if (o.isMesh) { o.castShadow = shadow; o.frustumCulled = false; o.material = o.material.clone();
+      o.material.color.setHex(robotColor); o.material.metalness = 0.12; o.material.roughness = 0.62;
+      if (opacity < 1) { o.material.transparent = true; o.material.opacity = opacity; o.material.depthWrite = false; }
+      mats.push(o.material); }
+  });
+  scene.add(root); return { root, bones, mats };
+}
+function retarget(bones, P) {
+  const tUp = dir(P,0,3), tRight = dir(P,2,1);
+  const Q1 = fromTo(bindDir.__hipUp, tUp);
+  const br2 = bindDir.__hipRight.clone().applyQuaternion(Q1); br2.addScaledVector(tUp, -br2.dot(tUp)).normalize();
+  const tr = tRight.clone().addScaledVector(tUp, -tRight.dot(tUp)).normalize();
+  let ang = Math.acos(THREE.MathUtils.clamp(br2.dot(tr), -1, 1));
+  if (_w.crossVectors(br2, tr).dot(tUp) < 0) ang = -ang;
+  const Q2 = new THREE.Quaternion().setFromAxisAngle(tUp, ang);
+  const RwHips = Q2.clone().multiply(Q1).multiply(bindQ.mixamorigHips);
+  const Rw = { mixamorigHips: RwHips };
+  bones.mixamorigHips.quaternion.copy(hipsParentQ.clone().invert().multiply(RwHips));
+  for (const [bn,, a, b] of ENTRIES) {
+    const Rwb = fromTo(bindDir[bn], dir(P,a,b)).multiply(bindQ[bn]);
+    const parentRw = Rw[bones[bn].parent.name] || bones[bn].parent.getWorldQuaternion(new THREE.Quaternion());
+    bones[bn].quaternion.copy(parentRw.clone().invert().multiply(Rwb)); Rw[bn] = Rwb;
+  }
+}
+
+// ---- skeleton fallback ----
+const up = new THREE.Vector3(0,1,0), va = new THREE.Vector3(), vb = new THREE.Vector3(), vd = new THREE.Vector3();
 function makeSkel() {
   const g = new THREE.Group();
-  const jm = new THREE.MeshStandardMaterial({ color: 0xc23b3b, roughness: .6 });
-  const bm = new THREE.MeshStandardMaterial({ color: 0x6b7686, roughness: .6 });
+  const jm = new THREE.MeshStandardMaterial({ color: 0xc23b3b, roughness: .6 }), bm = new THREE.MeshStandardMaterial({ color: 0x6b7686, roughness: .6 });
   const joints = [], bones = [];
-  for (let i = 0; i < 22; i++) { const s = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 16), jm); s.castShadow = true; g.add(s); joints.push(s); }
-  for (let j = 1; j < 22; j++) { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 1, 12), bm); c.castShadow = true; g.add(c); bones.push({ mesh: c, j }); }
-  g.visible = false; scene.add(g); return { g, joints, bones };
+  for (let i=0;i<22;i++){ const s=new THREE.Mesh(new THREE.SphereGeometry(0.03,16,16),jm); s.castShadow=true; g.add(s); joints.push(s); }
+  for (let j=1;j<22;j++){ const c=new THREE.Mesh(new THREE.CylinderGeometry(0.013,0.013,1,12),bm); c.castShadow=true; g.add(c); bones.push({mesh:c,j}); }
+  g.visible=false; scene.add(g); return { g, joints, bones };
 }
 const skel = makeSkel();
+function updateSkel(P){ for(let i=0;i<22;i++) skel.joints[i].position.set(P[i][0],P[i][1],P[i][2]);
+  for(const {mesh,j} of skel.bones){ va.set(P[PARENTS[j]][0],P[PARENTS[j]][1],P[PARENTS[j]][2]); vb.set(P[j][0],P[j][1],P[j][2]); vd.subVectors(vb,va); const len=vd.length()||1e-6; mesh.position.copy(va).addScaledVector(vd,0.5); mesh.scale.set(1,len,1); mesh.quaternion.setFromUnitVectors(up,vd.normalize()); } }
 
-let PARENTS = PARENTS_DEF, joints = null, verts = null, V = 0, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '';
+let PARENTS = PARENTS_DEF, joints = null, nframes = 0, fps = 20, frame = 0, playing = true, every = 6, prompt = '', loaded = false;
 
-function setBody(body, f) {
-  if (!verts) { body.mesh.visible = false; return; }
-  if (!body.geo.attributes.position) return;
-  body.geo.attributes.position.array.set(verts.subarray(f * V * 3, (f + 1) * V * 3));
-  body.geo.attributes.position.needsUpdate = true; body.geo.computeVertexNormals();
-}
-function updateSkel(P) {
-  for (let i = 0; i < 22; i++) skel.joints[i].position.set(P[i][0], P[i][1], P[i][2]);
-  for (const { mesh, j } of skel.bones) {
-    va.set(P[PARENTS[j]][0], P[PARENTS[j]][1], P[PARENTS[j]][2]); vb.set(P[j][0], P[j][1], P[j][2]);
-    vd.subVectors(vb, va); const len = vd.length() || 1e-6;
-    mesh.position.copy(va).addScaledVector(vd, 0.5); mesh.scale.set(1, len, 1);
-    mesh.quaternion.setFromUnitVectors(up, vd.normalize());
-  }
-}
+function placeRobot(inst, P) { retarget(inst.bones, P); inst.root.position.set(P[0][0] - hh.x, P[0][1] - hh.y, P[0][2] - hh.z); }
 function setFrame(f) {
-  if (!joints) return;
+  if (!joints || !loaded) return;
   frame = Math.max(0, Math.min(nframes - 1, Math.round(f)));
   const useSkel = $('showSkel').checked, useGhost = $('showGhost').checked && !useSkel;
-  skel.g.visible = useSkel;
-  nowBody.mesh.visible = !useSkel && !!verts;
-  if (useSkel) updateSkel(joints[frame]); else setBody(nowBody, frame);
-  for (let i = 0; i < N_GHOST; i++) {
-    const gf = frame - (i + 1) * every, on = useGhost && gf >= 0 && !!verts;
-    ghostBodies[i].mesh.visible = on;
-    if (on) setBody(ghostBodies[i], gf);
-  }
-  $('frame').value = frame; $('fc').textContent = (frame + 1) + '/' + nframes;
+  skel.g.visible = useSkel; now.root.visible = !useSkel;
+  if (useSkel) updateSkel(joints[frame]); else placeRobot(now, joints[frame]);
+  for (let i=0;i<N_GHOST;i++){ const gf=frame-(i+1)*every, on=useGhost&&gf>=0; ghosts[i].root.visible=on; if(on) placeRobot(ghosts[i], joints[gf]); }
+  $('frame').value = frame; $('fc').textContent = (frame+1)+'/'+nframes;
 }
 
 let acc = 0, last = performance.now();
-function loop(t) {
-  const dt = (t - last) / 1000; last = t;
-  if (joints && playing) { acc += dt * fps; if (acc >= 1) { setFrame((frame + Math.floor(acc)) % nframes); acc = 0; } }
-  controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop);
-}
-function resize() { const w = view.clientWidth, h = view.clientHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+function loop(t){ const dt=(t-last)/1000; last=t; if(joints&&playing){ acc+=dt*fps; if(acc>=1){ setFrame((frame+Math.floor(acc))%nframes); acc=0; } } controls.update(); renderer.render(scene,camera); requestAnimationFrame(loop); }
+function resize(){ const w=view.clientWidth,h=view.clientHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize(); requestAnimationFrame(loop);
 
-function frameCamera() {
+function frameCamera(){
   let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9,mnz=1e9,mxz=-1e9;
-  for (const P of joints) for (const p of P) { mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]);mnz=Math.min(mnz,p[2]);mxz=Math.max(mxz,p[2]); }
-  const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2;                   // aim at the trajectory centre (motion isn't centred on origin)
-  const H=mxy-mny, W=Math.max(mxx-mnx, mxz-mnz)+0.6, fov=camera.fov*Math.PI/180;
-  const aspect=Math.max(0.4, (view.clientWidth/view.clientHeight)||1.6), th=Math.tan(fov/2);
-  const dist=Math.max(2.6, (H+0.5)/2/th, (W/2)/(th*aspect))*1.15;   // fit width too, accounting for aspect
+  for(const Pf of joints) for(const p of Pf){ mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]);mnz=Math.min(mnz,p[2]);mxz=Math.max(mxz,p[2]); }
+  const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2, H=mxy-mny, W=Math.max(mxx-mnx,mxz-mnz)+0.6, fov=camera.fov*Math.PI/180;
+  const aspect=Math.max(0.4,(view.clientWidth/view.clientHeight)||1.6), th=Math.tan(fov/2);
+  const dist=Math.max(2.6,(H+0.5)/2/th, Math.min((W/2)/(th*aspect),4.3))*1.18;
   const ty=mny+H*0.46+0.1, az=-32*Math.PI/180, el=13*Math.PI/180;
-  controls.target.set(cx, ty, cz);
+  controls.target.set(cx,ty,cz);
   camera.position.set(cx+dist*Math.cos(el)*Math.sin(az), ty+dist*Math.sin(el), cz+dist*Math.cos(el)*Math.cos(az));
   controls.update();
 }
 
 const status = m => $('status').textContent = m || '';
-for (const [el, out] of [['guidance','gv'],['length','lv'],['smooth','sv']]) $(el).oninput = () => $(out).textContent = $(el).value;
+for (const [el,out] of [['guidance','gv'],['length','lv'],['smooth','sv']]) $(el).oninput = () => $(out).textContent = $(el).value;
 ['walks forward','sits down','is jumping','waves with the right hand','runs in a circle','kicks with the left leg']
-  .forEach(p => { const c = document.createElement('span'); c.className = 'chip'; c.textContent = p; c.onclick = () => $('prompt').value = 'a person ' + p; $('chips').appendChild(c); });
+  .forEach(p => { const c=document.createElement('span'); c.className='chip'; c.textContent=p; c.onclick=()=>$('prompt').value='a person '+p; $('chips').appendChild(c); });
 $('showGhost').onchange = $('showSkel').onchange = () => setFrame(frame);
-$('bodyColor').onchange = () => { bodyColor = parseInt($('bodyColor').value, 16); for (const m of bodyMats) m.color.setHex(bodyColor); };
-$('showShadow').onchange = () => { nowBody.mesh.castShadow = $('showShadow').checked; key.shadow.needsUpdate = true; };
-$('frame').oninput = e => { playing = false; $('play').textContent = 'play'; setFrame(+e.target.value); };
-$('play').onclick = () => { playing = !playing; $('play').textContent = playing ? 'pause' : 'play'; };
+$('bodyColor').onchange = () => { robotColor = parseInt($('bodyColor').value,16); for(const r of allRobots) for(const m of r.mats) m.color.setHex(robotColor); };
+$('showShadow').onchange = () => { for(const r of allRobots) r.root.traverse(o=>{ if(o.isMesh && o.material.opacity===1) o.castShadow=$('showShadow').checked; }); };
+$('frame').oninput = e => { playing=false; $('play').textContent='play'; setFrame(+e.target.value); };
+$('play').onclick = () => { playing=!playing; $('play').textContent=playing?'pause':'play'; };
 
-function b64bytes(s) { const bin = atob(s), n = bin.length, u = new Uint8Array(n); for (let i = 0; i < n; i++) u[i] = bin.charCodeAt(i); return u; }
+new GLTFLoader().load(ROBOT_URL, (g) => {
+  const original = g.scene; original.updateMatrixWorld(true);
+  const byName = {}; original.traverse(o => { if (o.isBone) byName[o.name] = o; });
+  for (const n in byName) bindQ[n] = byName[n].getWorldQuaternion(new THREE.Quaternion());
+  for (const [bn,cn] of ENTRIES) { const pb=byName[bn].getWorldPosition(new THREE.Vector3()), pc=byName[cn].getWorldPosition(new THREE.Vector3()); bindDir[bn]=pc.sub(pb).normalize(); }
+  bindDir.__hipUp = byName.mixamorigSpine.getWorldPosition(new THREE.Vector3()).sub(byName.mixamorigHips.getWorldPosition(new THREE.Vector3())).normalize();
+  bindDir.__hipRight = byName.mixamorigLeftUpLeg.getWorldPosition(new THREE.Vector3()).sub(byName.mixamorigRightUpLeg.getWorldPosition(new THREE.Vector3())).normalize();
+  byName.mixamorigHips.parent.getWorldQuaternion(hipsParentQ);
+  now = makeRobot(original, 1, true); now.root.updateMatrixWorld(true);
+  now.bones.mixamorigHips.getWorldPosition(hh);                       // hips offset so root.pos drives the pelvis
+  ghosts = []; for (let i=0;i<N_GHOST;i++) ghosts.push(makeRobot(original, 0.14 + 0.26*(1-i/N_GHOST), false));
+  allRobots = [now, ...ghosts];
+  loaded = true; status('robot ready'); generate();
+}, undefined, e => status('robot load failed: ' + e));
 
+function b64bytes(s){ const bin=atob(s),n=bin.length,u=new Uint8Array(n); for(let i=0;i<n;i++)u[i]=bin.charCodeAt(i); return u; }
 async function generate() {
-  status('generating (fitting body mesh)...'); $('gen').disabled = true;
+  if (!loaded) return; status('generating...'); $('gen').disabled = true;
   try {
-    const r = await fetch('/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: $('prompt').value, guidance: +$('guidance').value, length: +$('length').value,
-        smooth: +$('smooth').value, mesh: true, seed: Math.floor(Math.random() * 1e6) }) });
+    const r = await fetch('/generate', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ prompt:$('prompt').value, guidance:+$('guidance').value, length:+$('length').value, smooth:+$('smooth').value, mesh:false, seed:Math.floor(Math.random()*1e6) }) });
     const d = await r.json();
     joints = d.joints; PARENTS = d.parents || PARENTS_DEF; fps = d.fps || 20; nframes = joints.length; prompt = d.prompt;
-    if (d.verts) {
-      verts = new Float32Array(b64bytes(d.verts).buffer); V = d.V;
-      const faces = new Uint32Array(b64bytes(d.faces).buffer);
-      for (const b of allBodies) { b.geo.setIndex(new THREE.BufferAttribute(faces.slice(), 1)); b.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(V * 3), 3)); }
-    } else { verts = null; }
-    every = Math.max(2, Math.round(nframes / 24));
-    frameCamera();
-    $('frame').max = nframes - 1; playing = true; $('play').textContent = 'pause'; setFrame(0);
-    status('"' + d.prompt + '"  (' + nframes + ' frames)');
-  } catch (e) { status('error: ' + e); }
+    every = Math.max(2, Math.round(nframes/24)); frameCamera();
+    $('frame').max = nframes-1; playing=true; $('play').textContent='pause'; setFrame(0);
+    status('"'+d.prompt+'"  ('+nframes+' frames)');
+  } catch(e){ status('error: '+e); }
   $('gen').disabled = false;
 }
 $('gen').onclick = generate;
 
-// ---- export: bake the on-screen render (ghosts included) + a caption strip ----
-function compose() {
-  const src = renderer.domElement, w = src.width, h = src.height, bar = Math.round(h * 0.13);
-  const c = document.createElement('canvas'); c.width = w; c.height = h + bar;
-  const x = c.getContext('2d');
-  x.fillStyle = '#f7f7fa'; x.fillRect(0, 0, w, h + bar);
-  x.drawImage(src, 0, 0);
-  x.fillStyle = '#282a30'; x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.font = '700 ' + Math.round(bar * 0.46) + 'px system-ui, sans-serif';
-  x.fillText('"' + prompt + '"', w / 2, h + bar / 2);
-  return c;
+function compose(){
+  const src=renderer.domElement, w=src.width, h=src.height, bar=Math.round(h*0.13);
+  const c=document.createElement('canvas'); c.width=w; c.height=h+bar; const x=c.getContext('2d');
+  x.fillStyle='#f7f7fa'; x.fillRect(0,0,w,h+bar); x.drawImage(src,0,0);
+  x.fillStyle='#282a30'; x.textAlign='center'; x.textBaseline='middle';
+  let fs=Math.round(bar*0.46); x.font='700 '+fs+'px system-ui,sans-serif'; const t='"'+prompt+'"';
+  while (x.measureText(t).width > w*0.94 && fs > 9) { fs--; x.font='700 '+fs+'px system-ui,sans-serif'; }
+  x.fillText(t, w/2, h+bar/2); return c;
 }
-function download(url, name) { const a = document.createElement('a'); a.href = url; a.download = name; a.click(); }
-$('savePng').onclick = () => { renderer.render(scene, camera); download(compose().toDataURL('image/png'), 'motion.png'); };
+function download(url,name){ const a=document.createElement('a'); a.href=url; a.download=name; a.click(); }
+$('savePng').onclick = () => { renderer.render(scene,camera); download(compose().toDataURL('image/png'),'motion.png'); };
 $('saveGif').onclick = async () => {
-  if (!joints) return status('generate first');
-  status('encoding gif...');
-  const ws = URL.createObjectURL(await fetch('https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js').then(r => r.blob()));
-  const c0 = compose();
-  const gif = new GIF({ workers: 2, quality: 8, workerScript: ws, width: c0.width, height: c0.height });
-  const was = playing; playing = false;
-  for (let f = 0; f < nframes; f++) { setFrame(f); renderer.render(scene, camera); gif.addFrame(compose(), { copy: true, delay: 1000 / fps }); }
-  gif.on('progress', p => status('encoding gif ' + Math.round(p * 100) + '%'));
-  gif.on('finished', blob => { download(URL.createObjectURL(blob), 'motion.gif'); status('gif saved'); playing = was; });
+  if (!joints) return status('generate first'); status('encoding gif...');
+  const ws = URL.createObjectURL(await fetch('https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js').then(r=>r.blob()));
+  const c0=compose(); const gif=new GIF({workers:2,quality:8,workerScript:ws,width:c0.width,height:c0.height});
+  const was=playing; playing=false;
+  for(let f=0;f<nframes;f++){ setFrame(f); renderer.render(scene,camera); gif.addFrame(compose(),{copy:true,delay:1000/fps}); }
+  gif.on('progress',p=>status('encoding gif '+Math.round(p*100)+'%'));
+  gif.on('finished',blob=>{ download(URL.createObjectURL(blob),'motion.gif'); status('gif saved'); playing=was; });
   gif.render();
 };
-
-generate();
 </script>
 </body>
 </html>

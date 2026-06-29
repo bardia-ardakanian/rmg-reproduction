@@ -27,9 +27,10 @@ from PIL import Image, ImageDraw, ImageFont
 PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19]
 SPINE = [(0, 3), (3, 6), (6, 9), (9, 12)]
 HEAD_J = 15
-COLORS = {"green": [0.53, 0.85, 0.42], "yellow": [0.91, 0.78, 0.30], "purple": [0.71, 0.53, 0.88],
-          "teal": [0.36, 0.78, 0.75], "orange": [0.91, 0.59, 0.35], "gray": [0.70, 0.74, 0.82]}
-CLAY = list(COLORS["green"])          # bright by default for visibility; matches the web demo (--color to change)
+COLORS = {"wood": [0.80, 0.62, 0.42], "green": [0.53, 0.85, 0.42], "yellow": [0.91, 0.78, 0.30],
+          "purple": [0.71, 0.53, 0.88], "teal": [0.36, 0.78, 0.75], "orange": [0.91, 0.59, 0.35],
+          "gray": [0.70, 0.74, 0.82]}
+CLAY = list(COLORS["wood"])           # wooden artist-mannequin tone by default (--color to change)
 FLOOR = [0.88, 0.88, 0.91]
 FOV = np.pi / 3.8
 
@@ -56,29 +57,64 @@ def smooth_time(x, win=9):
     return np.stack([np.convolve(xp[:, c], k, mode="valid") for c in range(xf.shape[1])], 1).reshape(sh)
 
 
-# --------------------------------------------------------------------------- capsule fallback mannequin
-def _capsule(a, b, r):
-    if np.linalg.norm(b - a) < 1e-5:
-        return trimesh.creation.icosphere(radius=r, subdivisions=2).apply_translation(a)
-    c = trimesh.creation.cylinder(radius=r, segment=[a, b], sections=16)
-    caps = [trimesh.creation.icosphere(radius=r, subdivisions=2).apply_translation(p) for p in (a, b)]
-    return trimesh.util.concatenate([c] + caps)
+# --------------------------------------------------------------------------- wooden artist mannequin
+def _ball(c, r):
+    return trimesh.creation.icosphere(radius=r, subdivisions=3).apply_translation(np.asarray(c, float))
 
 
-def capsule_mesh(P):
-    rl, rb, rt, rh = 0.062, 0.072, 0.115, 0.135
-    parts = []
-    for j, p in enumerate(PARENTS):
-        if p >= 0 and (j, p) not in SPINE and (p, j) not in SPINE:
-            parts.append(_capsule(P[p], P[j], rl))
-    for a, b in SPINE:
-        parts.append(_capsule(P[a], P[b], rt))
-    parts.append(_capsule(P[1], P[2], rt * 0.8)); parts.append(_capsule(P[16], P[17], rt * 0.7))
-    for j in [0, 1, 2, 4, 5, 7, 8, 12, 16, 17, 18, 19, 20, 21]:
-        parts.append(trimesh.creation.icosphere(radius=rb, subdivisions=2).apply_translation(P[j]))
-    head = trimesh.creation.icosphere(radius=rh, subdivisions=3)
-    head.apply_scale([0.9, 1.2, 0.95]); head.apply_translation(P[HEAD_J] + np.array([0, 0.04, 0]))
-    parts.append(head)
+def _ellipsoid(center, xaxis, yaxis, sizes):
+    """Smooth rounded block: a unit sphere scaled to `sizes` then oriented so local x->xaxis, y->yaxis."""
+    m = trimesh.creation.icosphere(subdivisions=3, radius=1.0)
+    m.apply_scale(sizes)
+    x = np.asarray(xaxis, float); x = x / (np.linalg.norm(x) + 1e-9)
+    y = np.asarray(yaxis, float); y = y - x * np.dot(y, x); y = y / (np.linalg.norm(y) + 1e-9)
+    z = np.cross(x, y)
+    T = np.eye(4); T[:3, 0] = x; T[:3, 1] = y; T[:3, 2] = z; T[:3, 3] = np.asarray(center, float)
+    m.apply_transform(T)
+    return m
+
+
+def _frustum(a, b, ra, rb, sections=20):
+    """Tapered limb segment (cone frustum) from a (radius ra) to b (radius rb)."""
+    a = np.asarray(a, float); b = np.asarray(b, float)
+    axis = b - a; L = np.linalg.norm(axis)
+    if L < 1e-6:
+        return _ball(a, ra)
+    th = np.linspace(0, 2 * np.pi, sections, endpoint=False)
+    r0 = np.stack([ra * np.cos(th), ra * np.sin(th), np.zeros(sections)], 1)
+    r1 = np.stack([rb * np.cos(th), rb * np.sin(th), np.full(sections, L)], 1)
+    verts = np.vstack([r0, r1]); faces = []
+    for i in range(sections):
+        j = (i + 1) % sections
+        faces += [[i, j, sections + j], [i, sections + j, sections + i]]
+    fr = trimesh.Trimesh(verts, np.array(faces), process=False)
+    fr.apply_transform(trimesh.geometry.align_vectors([0, 0, 1], axis / L))
+    fr.apply_translation(a)
+    return fr
+
+
+def mannequin_mesh(P):
+    """Wooden artist mannequin (paper Fig 1): segmented torso, ball joints, tapered limbs, ovoid head.
+    Fixed anatomical proportions (HumanML3D skeletons are ~1.7m tall)."""
+    P = np.asarray(P, float)
+    n = lambda v: v / (np.linalg.norm(v) + 1e-9)
+    right = P[16] - P[17]
+    parts = [
+        _ellipsoid(P[0] * 0.60 + P[3] * 0.40, P[1] - P[2], P[3] - P[0], [0.118, 0.090, 0.088]),   # pelvis (lower torso)
+        _ellipsoid(P[6] * 0.5 + P[9] * 0.5, P[16] - P[17], P[9] - P[3], [0.142, 0.125, 0.094]),    # chest (upper torso)
+        _ball((P[3] + P[6]) / 2, 0.064),                                                           # waist (pinch)
+    ]
+    hu = P[15] - P[12]
+    parts.append(_frustum(P[12], P[15] - n(hu) * 0.085, 0.038, 0.034))                             # neck
+    parts.append(_ellipsoid(P[15], right, hu, [0.084, 0.114, 0.090]))                              # ovoid head
+    for s, e, w in [(16, 18, 20), (17, 19, 21)]:                                                   # arms (balls > limbs so joints pop)
+        parts += [_ball(P[s], 0.064), _frustum(P[s], P[e], 0.040, 0.034), _ball(P[e], 0.046),
+                  _frustum(P[e], P[w], 0.034, 0.028), _ball(P[w], 0.037),
+                  _ellipsoid(P[w] + n(P[w] - P[e]) * 0.05, right, P[w] - P[e], [0.044, 0.060, 0.024])]   # hand
+    for h, k, an, f in [(1, 4, 7, 10), (2, 5, 8, 11)]:                                             # legs
+        parts += [_ball(P[h], 0.078), _frustum(P[h], P[k], 0.060, 0.046), _ball(P[k], 0.058),
+                  _frustum(P[k], P[an], 0.046, 0.036), _ball(P[an], 0.046),
+                  _ellipsoid(P[an] * 0.30 + P[f] * 0.70, [1, 0, 0], P[f] - P[an], [0.044, 0.090, 0.050])]  # foot
     return trimesh.util.concatenate(parts)
 
 
@@ -137,26 +173,30 @@ def _font(size):
         return ImageFont.load_default()
 
 
-def caption(img, text, pad=0.13):
+def caption(img, text, pad=0.14):
     h, w = img.shape[:2]
     bar = int(h * pad)
     canvas = Image.new("RGB", (w, h + bar), (247, 247, 250))
     canvas.paste(Image.fromarray(img), (0, 0))
     d = ImageDraw.Draw(canvas)
-    f = _font(int(bar * 0.44))
     t = '"' + text + '"'
-    tw = d.textbbox((0, 0), t, font=f)[2]
-    d.text(((w - tw) / 2, h + bar * 0.26), t, fill=(40, 42, 48), font=f)
+    fs = int(bar * 0.42)
+    f = _font(fs); bb = d.textbbox((0, 0), t, font=f); tw = bb[2] - bb[0]
+    maxw = w * 0.94
+    if tw > maxw:                                          # shrink long prompts to fit
+        fs = max(9, int(fs * maxw / tw)); f = _font(fs); bb = d.textbbox((0, 0), t, font=f); tw = bb[2] - bb[0]
+    d.text(((w - tw) / 2 - bb[0], h + (bar - (bb[3] - bb[1])) / 2 - bb[1]), t, fill=(40, 42, 48), font=f)
     return np.array(canvas)
 
 
-def fit_view(pts, margin=1.20):
-    """pts (.., 3) already floor-dropped + xz-centered. Returns (dist, target_y)."""
+def fit_view(pts, margin=1.12):
+    """pts (.., 3) already floor-dropped + xz-centered. Returns (dist, target_y).
+    Width only pushes the camera back up to a cap, so a long run/jump stays readable (it spans the
+    frame edge-to-edge like the paper instead of shrinking to dots)."""
     H = float(pts[..., 1].max())
     W = float(max(pts[..., 0].ptp(), pts[..., 2].ptp())) + 0.5
-    vert = H + 0.45
     th = np.tan(FOV / 2)
-    return max(2.5, (vert / 2) / th, (W / 2) / th) * margin, H * 0.46 + 0.1
+    return max(2.5, (H + 0.45) / 2 / th, min((W / 2) / th, 4.3)) * margin, H * 0.46 + 0.1
 
 
 # --------------------------------------------------------------------------- per-clip mesh providers
@@ -213,8 +253,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--joints", default="report/mesh_joints.npz")
     ap.add_argument("--mode", choices=["montage", "gif"], default="montage")
-    ap.add_argument("--body", choices=["smplx", "capsule"], default="smplx")
-    ap.add_argument("--color", choices=list(COLORS), default="green")
+    ap.add_argument("--body", choices=["mannequin", "smplx"], default="mannequin")
+    ap.add_argument("--color", choices=list(COLORS), default="wood")
     ap.add_argument("--model_path", default=os.environ.get("SMPLX_PATH", "models/smplx"))
     ap.add_argument("--iters", type=int, default=400)
     ap.add_argument("--res", type=int, default=540)
@@ -245,7 +285,7 @@ def main():
             fm = lambda f, P=pts, F=faces: trimesh.Trimesh(P[f], F, process=False)
         else:
             pts = J[i] @ rot.T
-            fm = lambda f, P=pts: capsule_mesh(P[f])
+            fm = lambda f, P=pts: mannequin_mesh(P[f])
         render_one(pts, fm, prompts[i], a.mode, a.out, i, a.res, a.azim, a.elev, a.dist,
                    a.ghosts, a.every, a.fps)
 

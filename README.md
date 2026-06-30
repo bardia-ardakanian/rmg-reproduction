@@ -231,7 +231,7 @@ if this repo helped, a link back is appreciated:
 
 ```bibtex
 @misc{ardakanian2026rmgrepro,
-  title  = {An Unofficial Reimplementation of Riemannian Motion Generation (RMG)},
+  title  = {An Open Implementation of Riemannian Motion Generation (RMG)},
   author = {Ardakanian, Bardia},
   year   = {2026},
   howpublished = {\url{https://github.com/bardia-ardakanian/rmg-reproduction}}
